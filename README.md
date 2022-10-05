@@ -1,2 +1,2 @@
 # Mixed-Effects
-# R Markdown files with examples of mixed effects problems.
+# R Markdown files with examples from mixed effects problems.
