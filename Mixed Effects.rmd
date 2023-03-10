@@ -1,0 +1,488 @@
+---
+title: "Mixed Effects"
+author: "Phil Shea"
+date: "`r Sys.Date()`"
+output: pdf_document
+html_document:
+    number_sections: true
+pdf_document:
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+require( nlme)
+```
+
+Personally, I found most of the descriptions of the mixed effects models difficult to understand.  This was pretty frustrating because I understood the theory, but not the words describing how R handles the theory.  They are not wrong, but it seems that one had to understand how R dealt with the models already.  Hopefully the examples below will help someone else too.
+
+# Simple Linear Models
+
+The `Orthodont` data displays many problems common in analysis.  The data frame has 108 rows and 4 columns of the change in an orthdontic measurement over time for 27 young subjects at ages of 8, 10, 12, & 14 years.
+
+`lm` estimates *fixed values* (or fixed effects).  These are unknown constants whose measurements are corrupted by noise, with an equation like $y=m x + b + \epsilon$, where $x$ is the independent variable, $m$ is the slope, $b$ is the intercept, $\epsilon$ is measurement error (assumed normally distributed with zero mean), and $y$ is the dependent variable.  As we add independent variables, we add slopes and intercepts for each. The point is, there is one source of error ($\epsilon$) and everything else is a constant to be estimated (or a *fixed effect*).
+
+The original data is grouped in a way which solves many problems already, so a new data frame with just the raw data is created so we can solve the problems ourselves. Since the slope will be calculated at ages 8 to 14, an intercept at zero is a bit odd.  The code below will change the `age` variable to be centered on 11 years.
+
+```{r flm1, fig.cap="All data with single fit line."}
+O <- as.data.frame( Orthodont) #simplify data
+O$Subject <- factor( O$Subject, ordered=FALSE) # remove order of factor.
+O$age <- O$age - 11 # center the independent variable.
+names(O)
+flm1 <- lm( distance ~ age, data=O)
+(sflm1 <- summary( flm1))
+plot( O$age, O$distance, type='b', lty='dotted',
+      pch=c( 1, 2)[O$Sex], col=c('blue', 'red')[O$Sex], xlab="Age - 11 years",
+      ylab="mm", main="Orthodont data", sub="Distance vs. age")
+abline( flm1, lwd=2)
+legend( x="topleft", legend=c("boys", "girls"), col=c('blue', 'red'),
+        pch=c( 1, 2) )
+```
+
+Unsurprisingly, the girls are smaller.  The line fits the whole dataset, but rather poorly.  We can use `lmList` to run `lm` on each `Sex` independently (that is, as if there is nothing in common between the sexes).
+
+```{r flm2, fig.cap="Individual fits by Sex."}
+flm2 <- lmList( distance ~ age | Sex, data=O)
+(sflm2 <- summary( flm2))
+sflm2$adj.r.squared
+plot( augPred( flm2, primary=~ age))
+```
+
+This is closer to what we want, but it isn't clear that the slopes are different.  The adjusted r-squared is better for the boys, but worse for the girls.  Indeed, the slopes are within each others standard error: 
+
+```{r echo=FALSE}
+(cflm2 <- coef(sflm2))
+cat( "Male Intr - 1 SD: ", cflm2[1,1,1] - cflm2[1,2,1], "\n")
+cat( "Female Intr + 1 SD: ", cflm2[2,1,1] + cflm2[2,2,1], "\n")
+cat( "Male slope - 1 SD: ", cflm2[1,1,2] - cflm2[1,2,2], "\n")
+cat( "Female slope + 1 SD: ", cflm2[2,1,2] + cflm2[2,2,2], "\n")
+```
+
+This can be plotted easier (here with 90% confidence intervals):
+
+```{r fig.cap="90% Confidence intervals for flm2 parameters."}
+plot( intervals( flm2))
+```
+
+This indicates that the intercepts look different, and the slopes overlap.  
+
+The following will give an estimate of the difference in the girls' intercept by adding `Sex` to the equation:
+
+```{r flm3}
+flm3 <- lm( distance ~ age + Sex, data=O)
+dummy.coef( flm3)
+(sflm3 <- summary( flm3))
+```
+
+With this treatment, it indicates that the girls' intercept is `r round( coef(flm3)[3], 3)` mm smaller than the boys', and that the distance increases `r round( coef( flm3)[2], 2)` mm per year on average when estimated for both.  Note that the rsquared increased from `r round(  sflm1$adj.r.squared, 2)` to `r round( sflm3$adj.r.squared, 2)` using only one additional degree of freedom, so this is a much better fit.  Perhaps the girls should be modeled with a different slope and intercept:
+
+```{r flm4}
+flm4 <- lm( distance ~ age * Sex, data=O)
+(sflm4 <- summary( flm4))
+```
+
+That shows that a seperate slope for girls is not statistically significant.  
+
+# Mixed Effect Models
+
+The issue with the above treatment is that the model is ignorant of the fact that each child is unique.  While we clearly showed that the girls were smaller than the boys, a small boy's data is regressed with a larger boy's data.  Really, we ought to treat each child as a distinct experiment. Mixed effects models allow us to assume that some of the parameters may themselves be random variables.  This makes more sense, as each child is unique, and we can consider that we don't have the whole population of children, but a representative sample (27 in this data set).
+
+## Last Try with `lm` & `lmList`
+
+We can try adding in the `Subject` to `lm` to see if this helps the situation.
+
+```{r flm5}
+flm5 <- lm( distance ~ age + Sex + Subject, data=O)
+(sflm5 <- summary( flm5))
+```
+
+Unsurprisingly, only a subset of subjects are statistically significant.  R-squared looks improved, but this result is clearly nonsense. It is difficult to get a good plot of these intervals as there is no `intervals` method for `lm`, but the below is at least partially satisfactory. (Yes, this is sloppy, but I spent too much time just getting here, and this is not the point of this paper.)
+
+```{r fig.cap="flm5 Subject 95% conf intervals"}
+tmp <- confint( flm5)
+tmp <- na.omit( tmp[ grep( "Subject", rownames( tmp)), ])
+tmp <- tmp[ order( tmp[ ,1]), ]
+barplot( height=tmp[ ,2]-tmp[,1], offset=tmp[, 1], horiz=TRUE, 
+         xlim=c( min( tmp[ , 1]), max( tmp[ , 2])),
+         panel.first=grid())
+```
+
+Note that all it did was find a distinct intercept for most subjects (as there are two other intercepts, the overall `(Intercept)` and `SexFemale`, subject `F11` did not get an intercept).
+ 
+The following will simply fit each subject.
+ 
+```{r flm6, fig.cap="Subject by Subject fits."}
+flm6 <- lmList( distance ~ age  | Subject, data=O)
+#(sflm6 <- summary( flm6))
+plot( augPred( flm6, primary=~ age))
+```
+ 
+Each fit looks pretty good, but this is not useful.  Perhaps it gives a range of equation parameters, but it does not give us any statistics on boys vs. girls.  We can look at the boys vs girls via an `intervals` plot (available for `lmList`).
+ 
+```{r fig.cap="flm6 (lmList) intervals"}
+plot( intervals( flm6))
+```
+ 
+So while the boys and girls appear quite different (and hooray for that), the ranges cover each other.
+
+## Using Mixed Effects
+
+Mixed effect will allow us to estimate the differences between boys and girls (thank heaven), while still modelling the individual growth. The mixed effects model assumes that some of the things we are estimating are themselves random variables.   A *random effect* formula is then a specification of which model parameter is actually a random variable.  The model will be something like this (\ref{eq:model1}):
+
+\begin{equation}
+y_{i,j} = (m + m_j) x_{i,j} + b + b_j + \epsilon \label{eq:model1}
+\end{equation}
+
+where the $j$th subset has "random" slope and intercept, modeled by `lme` as normal distributions with zero mean: these are perturbations to the overall mean and intercept (the *fixed effects*).  In our example, we could have a random sample for `Sex`, for `Subject`, and we can even combine `Sex` and `Subject`.
+
+```{r fme1, fig.cap="Regression on age alone, with random effects of slope and intercept by subject."}
+fme1 <- lme(distance ~ age, random= ~ age | Subject, data = O, method="ML")
+# Use "ML" to compare to lm results.
+(sfme1 <- summary( fme1))
+# we must tell augPred what variable drives the model. Level 0 is the overall
+# fixed effect, level 1 the subjects.
+plot( augPred( fme1, primary= ~ age, level=c(0,1)))
+```
+ 
+ The above formula `distance ~ age` will estimate a slope and intercept based on `age`, and the specification `random = ~ age | Subject` says that each subject will have its own random variables for slope and intercept (reminder: `~ age` is equivalent to `~ age + 1`).  In effect, the slope and intercept estimated is the mean slope and intercept, and the random effects will estimate the variance of these by subject.  A close examination of the figure above will reveal that the `Subject` fits all have a different slope and intercept.
+ 
+ Is it a better fit than `lm` gave us?  The coefficients are identical:
+ 
+```{r}
+paste( " flm1: ")
+coef( flm1)
+confint( flm1)
+cat( "\n fme1: ")
+fixed.effects( fme1)
+
+intervals( fme1)
+```
+ 
+ So the intercept estimated by `fme1` has a wider range, but the coefficient of `age` is tighter.  We can use `anova` to compare them, but we must put the `lme` fit first to get the `lme` method to execute.
+ 
+```{r}
+anova( fme1, flm1)
+```
+ 
+ `fme1` is a substantially better fit than `flm1`, unsurprising since it uses six parameters vs. `lm`'s three (overall slope & intercept, overall variance, a variance each of random slopes and intercepts by `Subject`, and a variance by `Subject`).
+
+## Which Mixed Effects?
+
+That successfully modeled the overall data.  The slope and intercept are close to those estimated by `lm` modeling with `Sex` (`flm3`), although `Sex` was not modeled here.  The specification `random = ~ age | Subject` caused `lme` to model each subject independently with a slope and intercept.  We did not model `Sex`, so we have seven choices to go on modeling. (We could have many more, but we will see that modeling without a random intercept is fruitless, and we will also avoid crossing `Sex` and `Subject`, as each `Subject` has only one `Sex`.)
+
+|Model ($x=age$)             | Random   |  by      | model |
+|----------------------------|:---------|:---------|-------|
+|$a + b x$                   | $a$ & $b$| `Subject`| `fme1`|
+|$a + b x$                   | $a$      | `Subject`| `fme2`|
+|$a + b x$                   | $b$      | `Subject`|`fme2b`|
+|$a + b x + c_{Sex}$         | $a$      | `Subject`| `fme3`|
+|$a + b x + c_{Sex}$         | $a$ & $b$| `Subject`| `fme4`|
+|$a + (b+d_{Sex})x + c_{Sex}$| $a$      | `Subject`| `fme5`|
+|$a + (b+d_{Sex})x + c_{Sex}$| $a$ & $b$| `Subject`| `fme6`|
+
+`update` will allow a simpler call.
+
+```{r fme2, fig.cap="Random effect of intercept only by subject."}
+fme2 <- update( fme1, random = ~ 1 | Subject) # just intercept
+(sfme2 <- summary( fme2))
+intervals( fme2)
+anova( fme2, fme1)
+plot( augPred( fme2, primary= ~ age, level=c(0,1)))
+```
+
+Since `fme1` and `fme2` estimated the same parameters with different random effects, it makes sense to compare the resulting parameters.  The `coef` function returns the coefficients for each group, combining the random coefficient with the overall coefficient.  Since `fme2` only included random effects for the intercept, all of the `age` coefficients in `fme2` are the same.
+
+```{r}
+anova( fme2, fme1)
+```
+
+This indicates that the two fits are virtually equivalent, but `fme2` only has four parameters in its model. (So, here is a little mystery: there is no estimate of error by `Subject`.  Since there is no slope by `Subject`, there is no real basis to estimate this.)
+
+
+```{r fig.cap="Comparing coefficients when `age` is and is not a random effect"}
+cfme12 <- compareFits( coef( fme1), coef( fme2))
+pairs( cfme12)
+```
+
+It is clear that if the intercept is below the mean (`r fixed.effects( fme2)[1]`) in `fme2`, the corresponding coefficient of `age` in `fme1` is much smaller than that estimated in `fme2`.
+
+```{r fig.cap="slope vs. intercept for fme1."}
+plot( as.data.frame( coef( fme1)))
+```
+
+So, when estimating random effects of slope and intercept, they end up being strongly correlated.  Next, we try `age` as only random effect.
+
+```{r fme2b}
+fme2b <- update( fme1, random = ~ age - 1 | Subject)
+summary( fme2b)
+plot( augPred( fme2b, primary= ~ age, level=c(0,1)))
+```
+
+What happened here?  Actually, this did exactly what we would expect, but the slope by individual was a small perturbation.  The fixed and `Subject` lines in the figure substantially overlap so it looks like there is only one line.  Note that the AIC is much higher, so as expected it is not a useful fit.
+
+Next, continue with `Intercept` as only random effect, but look for an intercept by `Sex`.
+
+```{r fme3, fig.cap="Regression on age with Sex intercept, random effect of intercept only by subject."}
+fme3 <- update( fme2, distance ~ age + Sex) # fme2 only had random intercepts.
+# just intercept for each group
+summary(fme3)
+plot( augPred( fme3, primary= ~ age, level=c(0,1)))
+```
+
+All the fixed effects look significant, and the AIC is lower.  Let's add the slope random effect back in.
+
+```{r fme4, fig.cap="Regression on age and Sex, with random effect of slope and intercept by subject."}
+fme4 <- update( fme3, random = ~ age | Subject)
+summary(fme4)
+plot( augPred( fme4, primary= ~ age, level=c(0,1)))
+```
+
+Unsurprisingly, the AIC went up.  Note though that the fits do appear better when the slope and intercept are random effects.
+
+It seemed reasonable to add `Sex` as an intercept.  Let's compare the two ways of specifying random effects.
+
+```{r fig.cap="Camparison of fits fme3 & fme4."}
+cfme34 <- compareFits( coef( fme3), coef( fme4))
+pairs( cfme34)
+```
+
+Now we want to look back at only a random intercept, but let there be a different slope by `Sex`.
+
+```{r fme5, fig.cap="Slope by age and Sex, random intercept by Subject only."}
+fme5 <- update( fme3, distance ~ age * Sex)
+summary( fme5)
+plot( augPred( fme5, primary= ~ age, level=c( 0, 1)))
+```
+
+Lower AIC again.  Just to be complete, let us add the slope back in as a random effect.
+
+```{r fme6, fig.cap="Slope by age and Sex, random slope & intercept by subject."}
+fme6 <- update( fme5, random = ~ age | Subject)
+summary( fme6)
+plot( augPred( fme6, primary= ~ age, level=c(0,1)))
+```
+
+That generated the same coefficients, only the significance (Std. error) changed.
+
+## Finding the Best Fit
+
+The Akaike "An Information Criterion" will discern between these six estimates:
+
+```{r AIC}
+AIC( fme1, fme2, fme3, fme4, fme5, fme6)
+```
+
+`fme5` has the lowest AIC, with slope for `age`, and `age:Sex`, and an intercept for `Sex`, and treating the intercepts as random by `Subject`.
+
+```{r}
+anova( fme2, fme4, fme5)
+```
+All of these models have only random intercepts.  `fme5` is the clear winner.
+
+Now we can look at the normality assumptions.
+
+```{r fig.cap="qqplot of fme5"}
+qqnorm( fme5, abline=c(0,1), id=0.05, idLabels=paste(O$Subject,O$age))
+```
+
+Disappointing at best, and we can see that Subject M09 and M13 are outliers.
+
+```{r fig.cap="Outlier Subjects"}
+plot(Orthodont[O$Subject %in% c('M09', 'M13'),])
+```
+
+`M13` grows very fast (perhaps this is *normal*), but `M09` shrinks, twice.  We may have reason to drop this datum, as it is the only one which shows a decrease.  If we had more data, such as who made the measurements, we might justify removing the point.  The point adds noise to the estimates, but this noise could be representative of the noise present in all the measurements. 
+
+The following will show the `qqplot`s by `Sex`.
+
+```{r fig.cap="Residuals by `Sex`"}
+qqnorm(fme5, ~ residuals(., type = "pearson") | Sex, abline = c(0, 1))
+```
+
+The random effects are also assumed to be normal:
+
+```{r fig.cap="Normal assumption of random effects."}
+qqnorm(fme5, ~ranef(., standard=TRUE), abline=c(0,1))
+```
+
+We can compare the magnitude of the residuals against the fitted value.
+
+```{r fig.cap="Error magnitude against fitted values"}
+plot( fme5, abs( resid(.)) ~ fitted(.), type=c("p", "smooth"))
+```
+
+That looks pretty random.  Those outliers make the Males look more random than the Females.
+
+```{r fig.cap="Error magnitude against fitted values"}
+plot( fme5, resid(.) ~ fitted(.) | Sex, type=c("p", "smooth"))
+```
+
+```{r fig.cap="Bar plot of the residuals by Subject.  Note that there are only four samples for each subject."}
+plot( fme5, Subject ~ resid(.))
+```
+
+Subject M09 and M13 stand out here too.  Comparing the measured vs. the fitted values can show oddities too.
+
+```{r fig.cap="Measured vs. fitted for fme5."}
+plot( fme5, distance ~ fitted(.) | Subject, abline=c( 0, 1))
+```
+
+## Fitted Parameters
+
+Recall that the mixed effects model is the following (\ref{eq:model1}):
+
+$$
+y_{i,j} = (m + m_j) x_{i,j} + b + b_j + \epsilon 
+$$
+
+where $m$ and $b$ are unknown constants to be estimated, $\epsilon$ is $\mathcal{N}( o, \sigma_\epsilon)$, and the $m_j$ and $b_j$ are $\mathcal{N}( o, \sigma_j)$.  Therefore the parameters are $m, b, \sigma_j, \& \space  \sigma_\epsilon$.  
+
+## A few more fits
+
+This will be like `fme5` but without the intercept for `Sex`.
+
+```{r fme7}
+fme7 <- lme( distance ~ age + age:Sex, data = O, random = ~ 1 | Subject)
+summary( fme7)
+plot( augPred( fme7, primary= ~ age, level=c(0,1)))
+```
+
+Now like `fme6` but without intercept for `Sex` (or, like `fme7` with randeom effect for intercept by `Subject`).
+
+```{r fme8}
+fme8 <- lme( distance ~ age + age:Sex, data = O, random = ~ age | Subject)
+summary( fme8)
+plot( augPred( fme8, primary= ~ age, level=c(0,1)))
+```
+
+The AIC's for both are a bit larger.
+
+# Simulated Data
+
+If we simulate our data we can control the experiment completely and use very large samples that should converge to the correct values.  Following equation \ref{eq:model1} we can have a number of different random effects (like `Sex` and `Subject` from `Orthodont`), and we will call this number $M$ and will range from `1:M`; we will use the index $j$.  Each effect may have $K$ different values, and thus `K` intercepts and `K` means.  `K` could be a random number for each effect (thus there could be a $K_j$), and there is no particular reason why it cannot be large, but we will fix it.  If $K$ is large enough, we should be able to get a very precises estimate of the mean and variance of each of the $M$ random effects.  Each sample (row of final data frame) will have its response $y$ given by:
+
+\begin{equation}
+y_i = \left(m + \sum_{j=1}^M m_{i,j} \right) x_i + b + \sum_{j=1}^M b_{i,j} 
+\end{equation}
+$$
+y_i = \left(m + \sum_{j=1}^M m_{j,k_i} \right) x_i + b + \sum_{j=1}^M b_{j,k_i} 
+$$
+
+where the quantities $m_{j,k_i}$ and $b_{j,k_i}$ is meant to indicate the slope and intercept that belongs of the group $k$ that sample $i$ belongs.  This create a data frame with $2M + 2$ columns: a column for each of the $M$ factors, one for $y$ and one for $x$.
+
+Making the dataframe is a little tricky.  The data frame will have a column for $x$, $y$, and $M$ columns for the factors.  Making $y$ will require that we create the random effects for each of the $2M$ effects.  
+
+```{r}
+require( mvtnorm)
+M <- 3 # Number of random effects factors
+K <- rep( 100, M) # number of samples of each factor.
+N <- max( K) * 1000 # Ensures we have many samples of each factor.
+mx <- -2 # slope & intercept of fixed effect
+bx <- 1
+sx <- 1 # std dev of noise on y.
+mu <- 0:(2*M-1) # the means and intercepts of random effects will be increasing.
+Sigma <- diag( 1/( 1 + mu)) # variances are decreasing, and independent.
+re <- rmvnorm( n=max(K), mean=mu, sigma=Sigma, method="chol")
+colMeans( re)
+var( re)
+# if each k is not the same length, we will just ignore the extra.
+df <- data.frame( x=rnorm( N, mean=0, sd=sx))
+
+```
+
+
+# Appendix
+
+The `Orthodont` data frame is used in many R function examples, and some of those are expanded below.
+
+## GroupedData
+
+```{r}
+Orth.new <-  # create a new copy of the groupedData object
+  groupedData( distance ~ age | Subject,
+              data = as.data.frame( Orthodont ),
+              FUN = mean,
+              outer = ~ Sex,
+              labels = list( x = "Age",
+                y = "Distance from pituitary to pterygomaxillary fissure" ),
+              units = list( x = "(yr)", y = "(mm)") )
+plot( Orth.new )         # trellis plot by Subject
+formula( Orth.new )      # extractor for the formula
+gsummary( Orth.new )     # apply summary by Subject
+fm1 <- lme( Orth.new )   # fixed and groups formulae extracted from object
+Orthodont2 <- update(Orthodont, FUN = mean)
+```
+
+```{r}
+summary(fm1)
+```
+
+## gsummary
+
+```{r}
+gsummary(Orthodont)  # default summary by Subject
+## gsummary with invariantsOnly = TRUE and omitGroupingFactor = TRUE
+## determines whether there are covariates like Sex that are invariant
+## within the repeated observations on the same Subject.
+gsummary(Orthodont, inv = TRUE, omit = TRUE)
+```
+
+## lme.lmList
+
+```{r}
+fm1 <- lmList(Orthodont)
+fm2 <- lme(fm1)
+summary(fm1)
+summary(fm2)
+```
+
+## anova.gls
+
+```{r}
+# Pinheiro and Bates, p. 251-252
+fm1Orth.gls <- gls(distance ~ Sex * I(age - 11), Orthodont,
+correlation = corSymm(form = ~ 1 | Subject),
+weights = varIdent(form = ~ 1 | age))
+fm2Orth.gls <- update(fm1Orth.gls,
+corr = corCompSymm(form = ~ 1 | Subject))
+anova(fm1Orth.gls, fm2Orth.gls)
+```
+
+## anova.lme
+
+```{r}
+## Pinheiro and Bates, pp. 251-254 ------------------------------------------
+fm1Orth.gls <- gls(distance ~ Sex * I(age - 11), Orthodont,
+correlation = corSymm(form = ~ 1 | Subject),
+weights = varIdent(form = ~ 1 | age))
+fm2Orth.gls <- update(fm1Orth.gls,
+corr = corCompSymm(form = ~ 1 | Subject))
+## anova.gls examples:
+anova(fm1Orth.gls, fm2Orth.gls)
+fm3Orth.gls <- update(fm2Orth.gls, weights = NULL)
+anova(fm2Orth.gls, fm3Orth.gls)
+fm4Orth.gls <- update(fm3Orth.gls, weights = varIdent(form = ~ 1 | Sex))
+anova(fm3Orth.gls, fm4Orth.gls)
+# not in book but needed for the following command
+fm3Orth.lme <- lme(distance ~ Sex*I(age-11), data = Orthodont,
+random = ~ I(age-11) | Subject,
+weights = varIdent(form = ~ 1 | Sex))
+# Compare an "lme" object with a "gls" object (test would be non-sensical!)
+anova(fm3Orth.lme, fm4Orth.gls, test = FALSE)
+```
+
+## as/matrix.corrStruc
+
+```{r}
+cst1 <- corAR1(form = ~1|Subject)
+cst1 <- Initialize(cst1, data = Orthodont)
+as.matrix(cst1)
+```
+
+## as.matric.reStruct
+
+```{r}
+rs1 <- reStruct(pdSymm(diag(3), ~age+Sex, data = Orthodont))
+as.matrix(rs1)
+```
+

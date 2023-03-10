@@ -1,0 +1,350 @@
+---
+title: "Correlated Independent Variables"
+author: "Phil Shea"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r nomessages, echo = FALSE}
+knitr::opts_chunk$set(
+  warning = FALSE,
+  message = FALSE
+)
+options(digits=4)
+par(mar=c(5,4,1,1)+.1)
+set.seed( 31394)
+```
+
+# Introduction
+
+If the independent variables are themselves correlated, it can be difficult to tease out which should be included in the regression model.
+
+# `matlib` Vignette
+
+The following was taken from the `matlib` vignette "Gram-Schmidt Orthogonalization and Regression" by Michael Friendly [link here](https://cran.r-project.org/web/packages/matlib/vignettes/gramreg.html).
+
+___
+
+This vignette illustrates the process of transforming a set of variables to a new set of uncorrelated (orthogonal) variables. It carries out the Gram-Schmidt process **directly** by successively projecting each successive variable on the previous ones and subtracting (taking residuals).  This is equivalent by replacing each successive variable by its residuals from a least squares regression on the previous variables.
+
+When this method is used on the predictors in a regression problem, the resulting orthogonal variables have exactly the same `anova()` summary (based on "Type I", sequential sums of squares) as do original variables.
+
+## Setup
+
+We use the `class` data set, but convert the character factor `sex` to a dummy (0/1) variable `male`.
+
+```{r class1}
+library(matlib)
+data(class)
+class$male <- as.numeric(class$sex=="M")
+```
+
+For later use in regression, we create a variable `IQ` as a response variable
+```{r class2}
+class <- transform(class, 
+         IQ = round(20 + height + 3*age - 0.1*weight -3*male +
+                       10*rnorm( nrow( class))))
+head(class)
+```
+
+Reorder the predictors we want, forming a numeric matrix, `X`.
+```{r class3}
+X <- as.matrix(class[,c(3,4,2,5)])
+head(X)
+```
+
+## Orthogonalization by projections
+
+The Gram-Schmidt process treats the variables in a given order, according to the columns in `X`. We start with a new matrix `Z` consisting of `X[,1]`. Then, find a new variable `Z[,2]` orthogonal to `Z[,1]` by subtracting the projection of `X[,2]` on `Z[,1]`.
+
+```{r}
+Z <- cbind(X[,1], 0, 0, 0)
+Z[,2] <- X[,2] - Proj(X[,2], Z[,1])
+crossprod(Z[,1], Z[,2])     # verify orthogonality
+```
+Continue in the same way, subtracting the projections of `X[,3]` on the previous columns, and so forth
+```{r}
+Z[,3] <- X[,3] - Proj(X[,3], Z[,1]) - Proj(X[,3], Z[,2]) 
+Z[,4] <- X[,4] - Proj(X[,4], Z[,1]) - Proj(X[,4], Z[,2]) - Proj(X[,4], Z[,3])
+```
+Note that if any column of `X` is a linear combination of the previous columns, the corresponding column of `Z` will be all zeros.
+
+These computations are similar to the following set of linear regressions:
+```{r usinglm}
+z2 <- residuals(lm(X[,2] ~ X[,1]), type="response")
+z3 <- residuals(lm(X[,3] ~ X[,1:2]), type="response")
+z4 <- residuals(lm(X[,4] ~ X[,1:3]), type="response")
+```
+
+The columns of `Z` are now orthogonal, but not of unit length,
+```{r ortho1}
+zapsmall(crossprod(Z))     # check orthogonality
+```
+
+We make standardize column to unit length, giving `Z` as an **orthonormal** matrix, such that $Z' Z = I$.
+```{r ortho2}
+Z <- Z %*% diag(1 / len(Z))    # make each column unit length
+zapsmall( crossprod(Z))         # check orthonormal
+colnames(Z) <- colnames(X)
+```
+
+### Relationship to QR factorization
+The QR method uses essentially the same process, factoring the matrix $\mathbf{X}$ as $\mathbf{X = Q R}$, where $\mathbf{Q}$ is the orthonormal matrix corresponding to `Z` and $\mathbf{R}$ is an upper triangular matrix. However, the signs of the columns of $\mathbf{Q}$ are arbitrary, and `QR()` returns `QR(X)$Q` with signs reversed, compared to `Z`.
+
+```{r QR}
+# same result as QR(X)$Q, but with signs reversed
+head(Z, 5)
+head(-QR(X)$Q, 5)
+all.equal( unname(Z), -QR(X)$Q )
+```
+
+## Regression with X and Z
+
+We carry out two regressions of `IQ` on the variables in `X` and in `Z`. These are equivalent, in the sense that
+
+- The $R^2$ and MSE are the same in both models
+- Residuals are the same
+- The Type I tests given by `anova()` are the same.
+
+```{r class2IQ}
+class2 <- data.frame(Z, IQ=class$IQ)
+```
+
+Regression of IQ on the original variables in `X`
+```{r mod1, R.options=list(digits=5)}
+mod1 <- lm(IQ ~ height + weight + age + male, data=class)
+anova(mod1)
+```
+Regression of IQ on the orthogonalized variables in `Z`
+```{r mod2, R.options=list(digits=5)}
+mod2 <- lm(IQ ~ height + weight + age + male, data=class2)
+anova(mod2)
+```
+
+This illustrates that `anova()` tests for linear models are *sequential* tests.  They test hypotheses about the extra contribution of each variable over and above all previous ones, in a given order.  These usually do not make substantive sense, except in testing ordered ("hierarchical") models.
+
+___
+
+*This ends the original Vignette as extracted on 2/13/23.*
+
+## Intepretation
+
+As a reminder, IQ was created by the following:
+
+$$
+IQ = {\tt round}(20 + h + 3 a - 0.1 w -3 m + 10 \epsilon)
+$$
+where $\epsilon$ is a normal (0, 1) random variable and $h$, $a$, $w$, and $m$ are `height`, `age`, `weight`, and `male`, respectively.  The fitted values aren't even close to the creating equations.
+
+```{r summ_mod1}
+summary(mod1)
+```
+This is primarily due to the noise in the data combined with the co-linearity of the predictors as can be seen below. 
+
+```{r dataplot, fig.cap="Data Plot"}
+plot(class[,c(2,3,4,6)])
+cor(X)
+```
+`height` is highly correlated with both `weight` and `age`, as might be expected.  Both `age` and `weight` are highly correlated too.  This causes the random variations (which are rather large) to drive the correlated coefficients to unusual values.  Since they are correlated, one coefficient may get a large value and the other a small value and yet we still get a good correlation coefficient.  
+
+Both the `anova` and the coefficients indicate that neither `weight` nor `male` are good predictors, so let's eliminate those.
+
+```{r mod1.2}
+mod1.2 <- lm(IQ ~ height + age, data=class)
+anova(mod1.2)
+summary(mod1.2)
+```
+
+While `anova` indicates that both variables are needed and somewhat significant, the estimated `height` coefficient is not significant.  We know, of course, that it should be positive unity.  Note that while the r-squared is lower, the second fit is actually better.
+
+```{r AIC_mod1.2}
+AIC(mod1, mod1.2)
+```
+
+# Principle Component Analysis (PCA)
+
+PCA can further quantify this idea of finding which components are significant by rotating them optimally.
+
+```{r prcomp}
+(pr <- prcomp(class[,c(2,3,4,5)], scale=TRUE))
+summary( pr)
+plot(pr)
+```
+
+The cumulative proportion line shows that the first two principle components (PC) contains most (95%) of the variance of the data.  The other two PCs seem redundant. We'll fit the whole lot though.
+
+```{r lm.PCA}
+class.PCA <- cbind( class, pr$x) # Make new dataframe including PCs.
+mod3 <- lm( IQ ~ PC1 + PC2 + PC3 + PC4, data=class.PCA)
+anova( mod3)
+summary( mod3)
+```
+
+Now that we have all of the useful info in one component, we can see that there is very little correlation. 
+
+```{r PC1Plot}
+plot(IQ~PC1, data=class.PCA)
+abline(mod3)
+```
+
+```{r plot.PCA}
+plot( class.PCA[,c(6:10)])
+```
+
+## Transforming New Variable to Principle Components
+
+The Gram-Schmidt process is nice because it builds on individual observation vectors.  If you pick a good starting vector, you can interpret the results directly.  The PCs do not provide a direct way to intepret thier meaning. 
+
+The following is a simplified version of that found in [Principal Component Analysis in R: prcomp vs princomp](http://sthda.com/english/articles/31-principal-component-methods-in-r-practical-guide/118-principal-component-analysis-in-r-prcomp-vs-princomp): first `scale` and then right-multiply the rotation matrix. The `sum` shows that the conversion of the original data to the PCs are identical to those returned by `prcomp`.
+
+```{r}
+# The R scale function works with the prcomp results directly.
+# Followed by a simple dot product with the rotation element.
+
+new.coord <- scale(class[,2:5], center = pr$center, scale = pr$scale) %*%
+   pr$rotation
+
+sum( new.coord - pr$x)
+```
+
+### Converting PC Coefficients to Original Data
+
+While one can always convert the coordinates for a new sample to PCs as shown above, the coefficients of the PCs are difficult to interpret in any meaningful way.  We will ignore, for the moment, that one should never do this.  There will be a lot of detailed data wrangling required.
+
+The `scale` function does the following: $\ (\vec x - \vec c) mathbf S^{-1}$, where $\vec x$ is the original measurement vector, $\vec c$ is the center element vector, $\mathbf S$ is a diagonal matrix of the scale elements (we need to divide each element of $\vec y$ by the scale factor for that column).
+
+The PCs are created by 
+
+$$
+\vec p =  \mathbf R^\intercal \mathbf S^{-1} (\vec x - \vec c)  
+$$
+where $\vec p$ is the PC vector, and $\mathbf R$ is the rotation matrix returned by `prcomp`. In order to operate on the rows, we use `sweep` with a `margin` of `2` (`1` indicates rows, `2` columns).  The reciprocal of the diagonal elements forms the inverse of the matrix $\mathbf S$. Casting the selected elements of the data frame as a matrix, the rows form a series of $\vec x$ as row vectors (so we must transpose it), and we can execute the following transformation and compare it to the PCs.
+
+```{r new.coord2,a}
+new.coord2 <- t( pr$rotation) %*% diag(1/pr$scale) %*% t( sweep( as.matrix(class[,2:5]), 2, pr$center))
+#%*% 
+sum( (t( new.coord2) - pr$x)^2)
+```
+
+We can also use the `scale` function again to execute $ (\vec x - \vec c) \mathbf S^{-1}$ (and it appears to be more accurate):
+
+```{r new.coord2}
+new.coord3 <- scale( as.matrix(class[,2:5]), center=pr$center, scale=pr$scale) %*% pr$rotation
+sum( (new.coord3 - pr$x)^2)
+```
+
+If we have a PC vector $\vec y$, we can solve for $\vec x$ via
+
+$$
+\vec x = \vec c + \vec p \, \mathbf R^{-1} \mathbf S
+$$
+
+This is demonstrated below.
+
+```{r old.coord}
+old.coord <- sweep( pr$x %*% solve(pr$rotation) %*% 
+                       diag(pr$scale), 2, pr$center, FUN="+")
+
+sum(class[,2:5] - old.coord)
+```
+
+A regression returns coefficients which may be used to predict a mean response to a new observation.  The coefficients returned from a PCA must be applied to the PCs as follows:
+
+$$
+y = \vec \alpha_p \cdot \vec p'
+$$
+
+where $\alpha_p$ is a vector of the coefficients for the PCs, and $\vec p'$ is the PC vector augmented with a leading one (to catch the constant).  We have to construct the vector in the same order as the coefficients.  The below code snippet will show four methods of getting the same answer.
+
+```{r}
+(alph1 <- coef( mod1))
+# first element
+x <- as.numeric( c(1, class[1,c("height", "weight", "age", "male")])) 
+
+# dot product with original data.
+x %*% coef( mod1)
+
+# R predict function with original data.
+predict( mod1, newdata=class[1, 2:5])
+
+# dot product with PCs.
+coef( mod3) %*% c( 1, pr$x[1,])
+
+# R predict function with PCs.
+predict( mod3, newdata=as.data.frame( pr$x)[1,])
+```
+
+We will transform the $n$ length $\vec \alpha_p$ coefficients into ones we can relate to the original data $y=\vec \alpha_x \cdot \vec x'$.  Before we do this, we must deal with the transformation into the $n+1$ length *primed* form of the vectors.  We need to do this to represent algebraically what we are doing.  
+
+### Matrix Algebra
+
+The transform is given by the following:
+
+$$
+\eqalign {
+\vec v' &= \mathbf P \vec v + \vec o \\
+   &= \begin{bmatrix}0 & 0 & 0  & \cdots &0 & 0 \\
+1 & 0 & 0 &  \cdots & 0 & 0 \\
+0 & 1 & 0 &  \cdots & 0 & 0 \\
+0 & 0 & 1 &  \cdots & 0 & 0 \\
+ \vdots &  \vdots &  \vdots  &  \ddots & \vdots & \vdots \\
+ 0 & 0 & 0 & \cdots & 1 & 0 \\
+ 0 & 0 & 0 & \cdots & 0 & 1 \end{bmatrix} 
+ \vec v +
+  \begin{bmatrix} 1 \\ 0 \\ 0 \\ 0 \\\vdots \\ 0 \\ 0\end{bmatrix}
+}
+$$
+
+where $\mathbf\ P$ is a simple $n + 1 \times  n$ permutation matrix and $\vec o$ is an $n +1$ length column vector with one in the new first row.  Finally, if we did not want to keep all the PCs, we can simply truncate the the bottom of $\mathbf P$ and $\vec c$  to have fewer rows.  For example, if only two PCs were desired, keep only the first *three* rows of each (one fpr the constant, and a coefficient for each PC).
+
+Here is the algebra to get coefficients of $\vec x$:
+
+$$
+\eqalign {
+\vec \alpha_x \cdot \vec x' &=  \vec \alpha_p \cdot \vec p' \\
+   &= \vec \alpha_p \cdot (\mathbf P \vec p + \vec o) \\
+   &= \vec \alpha_p \cdot 
+         \{\mathbf P [ \vec x - \vec c] \mathbf S^{-1} \mathbf R) + \vec o\} \\
+   &= \vec \alpha_p \cdot 
+   \left( \mathbf P [\vec x \mathbf S^{-1} \mathbf R] \right) - 
+      \vec \alpha_p \cdot 
+      \left( \mathbf P [\vec c \mathbf S^{-1} \mathbf R]\right) +
+      \vec \alpha_p \cdot \vec o\ \\
+   &= \vec \alpha_p \cdot ( \mathbf P \mathbf H \vec x) - 
+      \vec \alpha_p \cdot 
+      ( \mathbf P \mathbf H \vec c) + \vec \alpha_p \cdot \vec o 
+}
+$$
+
+where $\mathbf H = (\mathbf S^{-1} \mathbf R)^\intercal$. The dot product with the vector is not associative: a dot product with a matrix is nonsense, and the permutation matrix cannot operate on the vectors $\vec x$ and $\vec c$ before the $\mathbf S^{-1} \mathbf R$ matrix pair.
+
+$$
+\eqalign {
+ \vec \alpha_p \cdot ( \mathbf P \mathbf H \vec x) &= 
+   \begin{bmatrix} \alpha_1 \\ \alpha_2 \\ \vdots \\ \alpha_m \end{bmatrix}
+      \cdot \begin{bmatrix} h_{11} & h_{12} & \cdots & h_{1n} \\
+      h_{21} & h_{22} & \cdots & h_{2n} \\
+      \vdots &  \vdots & \ddots & \vdots \\
+      h_{m1} & h_{m2} & \cdots & h_{mn} \end{bmatrix}
+ \begin{bmatrix} x_1 \\ x_2 \\ \vdots \\ x_n \end{bmatrix} \\
+ &= \begin{bmatrix} \alpha_1 \\ \alpha_2 \\ \vdots \\ \alpha_m \end{bmatrix} \cdot 
+\begin{bmatrix} \sum_{j=1}^n h_{1j}x_j \\ \sum_{j=1}^n h_{2j}x_j \\
+   \vdots \\ \sum_{j=1}^n h_{nj}x_j\end{bmatrix} \\
+ &= \sum_{i=1}^m \alpha_i \left( \sum_{j=1}^n h_{ij} x_j\right) \\
+ &= \sum_{j=1}^n x_j \left( \sum_{i=1}^m \alpha_i h_{ij} \right) \\
+ &= \vec x \cdot \vec \beta_x
+}
+$$
+
+where the matrix $\mathbf P$ merely creates the $m$ rows (and here, the associative property applies: $\mathbf P \mathbf H$ can be computed first).  The coefficients sought are given by $\beta_j = \sum_{i=1}^m \alpha_i h_{ij}$. This is essentially a dot product of $\alpha_p$ and the *columns* of $\mathbf H$.
+
+### Resulting Transform
+
+The desired coefficients of each original $x_i$ is given by the last term of the above.  With the PC coefficients $\alpha_i$, the rotation matrix $\mathbf R$, and hte scale matrix $\mathbf S$, we compute $\mathbf H = (\mathbf S^{-1} \mathbf R)^\intercal$ and form the vector $\beta_x$ whose elements are given by $ \beta_j = \sum_{i=1}^m \alpha_i h_{ij}$.
+
+```{r}
+(H <- t( diag( 1 / pr$scale) %*% pr$rotation))
+
+coef(mod3) %*% H
+```
+
