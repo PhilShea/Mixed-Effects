@@ -193,7 +193,7 @@ plot( class.PCA[,c(6:10)])
 
 ## Transforming New Variable to Principle Components
 
-The Gram-Schmidt process is nice because it builds on individual observation vectors.  If you pick a good starting vector, you can interpret the results directly.  The PCs do not provide a direct way to intepret thier meaning. 
+The Gram-Schmidt process is nice because it builds on individual observation vectors.  If you pick a good starting vector, you can interpret the results directly.  The PCs do not provide a direct way to interpret their meaning. 
 
 The following is a simplified version of that found in [Principal Component Analysis in R: prcomp vs princomp](http://sthda.com/english/articles/31-principal-component-methods-in-r-practical-guide/118-principal-component-analysis-in-r-prcomp-vs-princomp): first `scale` and then right-multiply the rotation matrix. The `sum` shows that the conversion of the original data to the PCs are identical to those returned by `prcomp`.
 
@@ -211,41 +211,43 @@ sum( new.coord - pr$x)
 
 While one can always convert the coordinates for a new sample to PCs as shown above, the coefficients of the PCs are difficult to interpret in any meaningful way.  We will ignore, for the moment, that one should never do this.  There will be a lot of detailed data wrangling required.
 
-The `scale` function does the following: $\ (\vec x - \vec c) mathbf S^{-1}$, where $\vec x$ is the original measurement vector, $\vec c$ is the center element vector, $\mathbf S$ is a diagonal matrix of the scale elements (we need to divide each element of $\vec y$ by the scale factor for that column).
+The `scale` function does the following: $ (\vec x - \vec c) \mathbf S^{-1}$, where $\vec x$ is the original measurement vector, $\vec c$ is the center element vector, $\mathbf S$ is a diagonal matrix of the scale elements (we need to divide each element of $\vec y$ by the scale factor for that column).
 
 The PCs are created by 
 
 $$
-\vec p =  \mathbf R^\intercal \mathbf S^{-1} (\vec x - \vec c)  
+\vec p = (\vec x - \vec c) \mathbf S^{-1}  \mathbf R
 $$
 where $\vec p$ is the PC vector, and $\mathbf R$ is the rotation matrix returned by `prcomp`. In order to operate on the rows, we use `sweep` with a `margin` of `2` (`1` indicates rows, `2` columns).  The reciprocal of the diagonal elements forms the inverse of the matrix $\mathbf S$. Casting the selected elements of the data frame as a matrix, the rows form a series of $\vec x$ as row vectors (so we must transpose it), and we can execute the following transformation and compare it to the PCs.
 
-```{r new.coord2,a}
-new.coord2 <- t( pr$rotation) %*% diag(1/pr$scale) %*% t( sweep( as.matrix(class[,2:5]), 2, pr$center))
+```{r new.coord2}
+x <- as.matrix(class[,2:5])
+new.coord2 <- sweep( x, 2, pr$center) %*% 
+   diag(1/pr$scale) %*% pr$rotation
 #%*% 
-sum( (t( new.coord2) - pr$x)^2)
+sum( (new.coord2 - pr$x)^2)
 ```
 
 We can also use the `scale` function again to execute $ (\vec x - \vec c) \mathbf S^{-1}$ (and it appears to be more accurate):
 
-```{r new.coord2}
-new.coord3 <- scale( as.matrix(class[,2:5]), center=pr$center, scale=pr$scale) %*% pr$rotation
+```{r new.coord3}
+new.coord3 <- scale( x, center=pr$center, scale=pr$scale) %*% pr$rotation
 sum( (new.coord3 - pr$x)^2)
 ```
 
-If we have a PC vector $\vec y$, we can solve for $\vec x$ via
+If we have a PC vector $\vec p$, we can solve for $\vec x$ via
 
 $$
-\vec x = \vec c + \vec p \, \mathbf R^{-1} \mathbf S
+\vec x = \vec c +   \vec p \mathbf R^{-1}\mathbf S 
 $$
 
-This is demonstrated below.
+This is demonstrated below (and we cannot use `scale` because of the order of operations).
 
 ```{r old.coord}
-old.coord <- sweep( pr$x %*% solve(pr$rotation) %*% 
-                       diag(pr$scale), 2, pr$center, FUN="+")
+old.coord <- sweep( pr$x %*% solve( pr$rotation) %*% diag( pr$scale), 
+                    2, -pr$center)
 
-sum(class[,2:5] - old.coord)
+sum(x - old.coord)
 ```
 
 A regression returns coefficients which may be used to predict a mean response to a new observation.  The coefficients returned from a PCA must be applied to the PCs as follows:
@@ -274,7 +276,7 @@ coef( mod3) %*% c( 1, pr$x[1,])
 predict( mod3, newdata=as.data.frame( pr$x)[1,])
 ```
 
-We will transform the $n$ length $\vec \alpha_p$ coefficients into ones we can relate to the original data $y=\vec \alpha_x \cdot \vec x'$.  Before we do this, we must deal with the transformation into the $n+1$ length *primed* form of the vectors.  We need to do this to represent algebraically what we are doing.  
+We will transform the $m=n+1$ length $\vec \alpha_p$ coefficients into ones we can relate to the original data $y=\vec \alpha_x \cdot \vec x'$.  Before we do this, we must deal with the transformation into the $n+1$ length *primed* form of the vectors.  We need to do this to represent algebraically what we are doing.  
 
 ### Matrix Algebra
 
@@ -282,69 +284,71 @@ The transform is given by the following:
 
 $$
 \eqalign {
-\vec v' &= \mathbf P \vec v + \vec o \\
-   &= \begin{bmatrix}0 & 0 & 0  & \cdots &0 & 0 \\
-1 & 0 & 0 &  \cdots & 0 & 0 \\
-0 & 1 & 0 &  \cdots & 0 & 0 \\
-0 & 0 & 1 &  \cdots & 0 & 0 \\
- \vdots &  \vdots &  \vdots  &  \ddots & \vdots & \vdots \\
- 0 & 0 & 0 & \cdots & 1 & 0 \\
- 0 & 0 & 0 & \cdots & 0 & 1 \end{bmatrix} 
- \vec v +
-  \begin{bmatrix} 1 \\ 0 \\ 0 \\ 0 \\\vdots \\ 0 \\ 0\end{bmatrix}
+\vec v' &=  \vec v \mathbf P + \vec o \\
+   &=  \vec v\begin{bmatrix}0 & 1 & 0  & 0 & \cdots & 0 & 0 \\
+0 & 0 & 1 & 0 & \cdots & 0 & 0 \\
+0 & 0 & 0 & 1 & \cdots & 0 & 0 \\
+ \vdots &  \vdots &  \vdots  &  \vdots & \ddots & \vdots & \vdots \\
+ 0 & 0 & 0 & 0 &\cdots & 1 & 0 \\
+ 0 & 0 & 0 & 0 & \cdots & 0 & 1 \end{bmatrix} 
+ +
+  \begin{bmatrix} 1 \\ 0 \\ 0 \\\vdots \\ 0 \\ 0\end{bmatrix}^\intercal
 }
 $$
 
-where $\mathbf\ P$ is a simple $n + 1 \times  n$ permutation matrix and $\vec o$ is an $n +1$ length column vector with one in the new first row.  Finally, if we did not want to keep all the PCs, we can simply truncate the the bottom of $\mathbf P$ and $\vec c$  to have fewer rows.  For example, if only two PCs were desired, keep only the first *three* rows of each (one fpr the constant, and a coefficient for each PC).
+where $\mathbf\ P$ is a simple $n \times n + 1$ permutation matrix and $\vec o$ is an $n +1$ length row vector with one in the new first column.  Finally, if we did not want to keep all the PCs, we can simply truncate the the right of $\mathbf P$ and $\vec c$ to have fewer columns.  For example, if only two PCs were desired, keep only the first *three* columns of each (one for the constant, and a coefficient for each PC).
 
 Here is the algebra to get coefficients of $\vec x$:
 
 $$
 \eqalign {
 \vec \alpha_x \cdot \vec x' &=  \vec \alpha_p \cdot \vec p' \\
-   &= \vec \alpha_p \cdot (\mathbf P \vec p + \vec o) \\
+   &= \vec \alpha_p \cdot (\vec p \mathbf P + \vec o) \\
    &= \vec \alpha_p \cdot 
-         \{\mathbf P [ \vec x - \vec c] \mathbf S^{-1} \mathbf R) + \vec o\} \\
+         \left[ \left( \vec x - \vec c \mathbf S^{-1} \mathbf R\right) \mathbf P 
+         + \vec o\right] \\
    &= \vec \alpha_p \cdot 
-   \left( \mathbf P [\vec x \mathbf S^{-1} \mathbf R] \right) - 
+   \left( \vec x \mathbf S^{-1} \mathbf R \mathbf P \right) - 
       \vec \alpha_p \cdot 
-      \left( \mathbf P [\vec c \mathbf S^{-1} \mathbf R]\right) +
+      \left( \vec c \mathbf S^{-1} \mathbf R \mathbf P \right) +
       \vec \alpha_p \cdot \vec o\ \\
-   &= \vec \alpha_p \cdot ( \mathbf P \mathbf H \vec x) - 
+   &= \vec \alpha_p \cdot \left( \vec x \mathbf H \right) - 
       \vec \alpha_p \cdot 
-      ( \mathbf P \mathbf H \vec c) + \vec \alpha_p \cdot \vec o 
+      \left( \vec c \mathbf H \right) + \vec \alpha_p \cdot \vec o 
 }
 $$
 
-where $\mathbf H = (\mathbf S^{-1} \mathbf R)^\intercal$. The dot product with the vector is not associative: a dot product with a matrix is nonsense, and the permutation matrix cannot operate on the vectors $\vec x$ and $\vec c$ before the $\mathbf S^{-1} \mathbf R$ matrix pair.
+where $\mathbf H = \mathbf S^{-1} \mathbf R \mathbf P$. The dot product with the vector is not associative: the permutation matrix cannot operate on the vectors $\vec x$ and $\vec c$ before the $\mathbf H$ matrix.  These products for vector sums as follows (assuming the dot product between a row and column vector is simply between two vectors, an assumption which applies in this case):
 
 $$
 \eqalign {
- \vec \alpha_p \cdot ( \mathbf P \mathbf H \vec x) &= 
+ \vec \alpha_p \cdot (\vec x \mathbf H) &= 
    \begin{bmatrix} \alpha_1 \\ \alpha_2 \\ \vdots \\ \alpha_m \end{bmatrix}
-      \cdot \begin{bmatrix} h_{11} & h_{12} & \cdots & h_{1n} \\
-      h_{21} & h_{22} & \cdots & h_{2n} \\
+      \cdot \begin{bmatrix} x_1 \\ x_2 \\ \vdots \\ x_n \end{bmatrix}^\intercal 
+      \begin{bmatrix} 0 & h_{12} & \cdots & h_{1m} \\
+      0 & h_{22} & \cdots & h_{2m} \\
       \vdots &  \vdots & \ddots & \vdots \\
-      h_{m1} & h_{m2} & \cdots & h_{mn} \end{bmatrix}
- \begin{bmatrix} x_1 \\ x_2 \\ \vdots \\ x_n \end{bmatrix} \\
+      0 & h_{n2} & \cdots & h_{nm} \end{bmatrix} \\
  &= \begin{bmatrix} \alpha_1 \\ \alpha_2 \\ \vdots \\ \alpha_m \end{bmatrix} \cdot 
-\begin{bmatrix} \sum_{j=1}^n h_{1j}x_j \\ \sum_{j=1}^n h_{2j}x_j \\
-   \vdots \\ \sum_{j=1}^n h_{nj}x_j\end{bmatrix} \\
- &= \sum_{i=1}^m \alpha_i \left( \sum_{j=1}^n h_{ij} x_j\right) \\
- &= \sum_{j=1}^n x_j \left( \sum_{i=1}^m \alpha_i h_{ij} \right) \\
+   \begin{bmatrix} 0 \\ \sum_{i=1}^n x_i h_{i2} \\
+   \vdots \\ \sum_{i=1}^n x_i h_{im} \end{bmatrix} \\
+ &= \sum_{j=2}^m \alpha_j \left( \sum_{i=1}^n x_i h_{ij} \right) \\
+ &= \sum_{i=1}^n x_i \left( \sum_{j=2}^m \alpha_j h_{ij} \right) \\
  &= \vec x \cdot \vec \beta_x
 }
 $$
 
-where the matrix $\mathbf P$ merely creates the $m$ rows (and here, the associative property applies: $\mathbf P \mathbf H$ can be computed first).  The coefficients sought are given by $\beta_j = \sum_{i=1}^m \alpha_i h_{ij}$. This is essentially a dot product of $\alpha_p$ and the *columns* of $\mathbf H$.
+The coefficients sought are given by $\beta_i = \sum_{j=2}^m \alpha_j h_{ij}$. 
 
 ### Resulting Transform
 
-The desired coefficients of each original $x_i$ is given by the last term of the above.  With the PC coefficients $\alpha_i$, the rotation matrix $\mathbf R$, and hte scale matrix $\mathbf S$, we compute $\mathbf H = (\mathbf S^{-1} \mathbf R)^\intercal$ and form the vector $\beta_x$ whose elements are given by $ \beta_j = \sum_{i=1}^m \alpha_i h_{ij}$.
+The desired coefficients of each original $x_i$ is given by the $\beta_i$ above.  With the PC coefficients $\alpha_i$, the rotation matrix $\mathbf R$, and the scale matrix $\mathbf S$, we compute $\mathbf H' = \mathbf S^{-1} \mathbf R$ and form the vector $\beta_x$ whose elements are given by $ \beta_j = \sum_{i=1}^m \alpha_i h_{ij}$.
 
 ```{r}
 (H <- t( diag( 1 / pr$scale) %*% pr$rotation))
 
-coef(mod3) %*% H
+coef(mod3)[2:5] %*% H
+
+coef(mod1)
 ```
 
