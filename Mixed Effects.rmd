@@ -1,10 +1,12 @@
 ---
-title: "Mixed Effects"
-author: "Phil Shea"
-date: "`r Sys.Date()`"
-output: pdf_document
 html_document:
     number_sections: true
+author: "Phil Shea"
+date: "`r Sys.Date()`"
+output: 
+  html_document: 
+    keep_md: yes
+title: "Mixed Effects"
 pdf_document:
     number_sections: true
 ---
