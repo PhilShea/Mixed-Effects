@@ -338,7 +338,7 @@ $$
 }
 $$
 
-The coefficients sought are given by $\beta_i = \sum_{j=2}^m \alpha_j h_{ij}$. 
+The coefficients sought are given by $\beta_i = \sum_{j=2}^m \alpha_j h_{ij}$, which is the coefficient as a row vector $\vec \alpha_p$ multiplying the matrix $\mathbf H$
 
 ### Resulting Transform
 
@@ -347,7 +347,9 @@ The desired coefficients of each original $x_i$ is given by the $\beta_i$ above.
 ```{r}
 (H <- t( diag( 1 / pr$scale) %*% pr$rotation))
 
-coef(mod3)[2:5] %*% H
+beta <- coef(mod3)[2:5] %*% H
+colnames( beta) <- rownames( pr$rotation) 
+beta
 
 coef(mod1)
 ```
